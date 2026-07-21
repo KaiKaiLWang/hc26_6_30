@@ -57,7 +57,7 @@ ros::Subscriber sub_gnss;
 ros::Subscriber sub_planche;
 ros::Subscriber sub_ctrlche;
 ros::Subscriber sub_multimap; //
-ros::Subscriber sub_vehistatus;
+//ros::Subscriber sub_vehistatus;
 
 // pub android
 ros::Publisher pub_status;
@@ -68,7 +68,7 @@ ros::Publisher pub_direct_control;
 ros::Publisher pub_vehicle_cmd;
 
 // sub android
-ros::Subscriber sub_manual;
+//ros::Subscriber sub_manual;
 ros::Subscriber sub_manual_driving;
 ros::Subscriber sub_singal;
 
@@ -83,8 +83,8 @@ std_msgs::Bool stop_car;
 bool init_mode = false;       // 初始化模式标志
 bool has_position = false;    // 是否有定位数据
 ros::Time init_start_time;    // 初始化开始时间
-double figure8_radius = 1.5;  // "8"字形半径（米）
-double figure8_period = 20.0; // "8"字形周期（秒）
+//double figure8_radius = 1.5;  // "8"字形半径（米）
+//double figure8_period = 20.0; // "8"字形周期（秒）
 
 // 初始化确认相关变量
 bool init_requested = false;     // 是否请求初始化
@@ -99,8 +99,8 @@ bool check_vslam = false;
 bool check_lidar = false;
 bool check_perception = false;
 bool check_multimap = false;
-bool check_battery = false;
-bool check_warn = false;
+//bool check_battery = false;
+//bool check_warn = false;
 bool check_camerargb = true;
 bool check_planok = false;
 bool check_controlok = false;
@@ -118,15 +118,9 @@ bool appsignal_flag = false; // 默认  /signal == pause | stop  1; continue  0;
 bool init_finish = false;
 
 // bool current_has_position = false; // 当前是否有定位数据
-bool straight_done = false;
 bool turn_left_done = false;
-bool turn_right_done = false;
-ros::Time straight_start_time;
-ros::Time turn_left_time;
-ros::Time turn_right_time;
-bool straight_active = false;
-bool turn_left_active = false;
-bool turn_right_active = false;
+ros::Time turn_time;
+bool turn_active = false;
 
 // 定义标志位对应的字符串表
 const std::string node_names[13] = {
@@ -157,6 +151,40 @@ enum tasks
     Obstacle_parking,        // 遇障停车
     Passing_connecting_space // 通过连通区
 } taskstatus;
+
+namespace {
+    enum class SignalCmd {
+        InitLocation,
+        InitConfirm,
+        InitCancel,
+        Reset,
+        StartExecution,
+        StopExecution,
+        StartWork,
+        Pause,
+        Continue,
+        Return,
+        Stop,
+        Unknown
+    };
+
+    SignalCmd ParseSignal(const std::string& signal)
+    {
+        if (signal == "init_location")   return SignalCmd::InitLocation;
+        if (signal == "true")            return SignalCmd::InitConfirm;
+        if (signal == "false")           return SignalCmd::InitCancel;
+        if (signal == "reset")           return SignalCmd::Reset;
+        if (signal == "start_execution") return SignalCmd::StartExecution;
+        if (signal == "stop_execution")  return SignalCmd::StopExecution;
+        if (signal == "start_work")      return SignalCmd::StartWork;
+        if (signal == "pause")           return SignalCmd::Pause;
+        if (signal == "continue")        return SignalCmd::Continue;
+        if (signal == "return")          return SignalCmd::Return;
+        if (signal == "stop")            return SignalCmd::Stop;
+        return SignalCmd::Unknown;
+    }
+}
+
 void goStraight()
 {
     mower_msgs::VehicleCmd cmd_msg;
@@ -171,8 +199,6 @@ void goStraight()
 }
 void controlFigure8_turnleft()
 {
-    // if (!init_mode || !init_confirmed)
-    //     return;
     mower_msgs::VehicleCmd cmd_msg;
     cmd_msg.drive_value = 100;
     cmd_msg.turn_value = -20;                // 向左转，持续走圆
@@ -185,11 +211,8 @@ void controlFigure8_turnleft()
     ROS_INFO("Driving in circle: drive_value=%d, turn_value=%d",
              cmd_msg.drive_value, cmd_msg.turn_value);
 }
-
 void controlFigure8_turnright()
 {
-    // if (!init_mode || !init_confirmed)
-    //     return;
     mower_msgs::VehicleCmd cmd_msg;
     cmd_msg.drive_value = 100;
     cmd_msg.turn_value = 20;                 // 向右转，持续走圆
@@ -202,6 +225,27 @@ void controlFigure8_turnright()
     ROS_INFO("Driving in circle: drive_value=%d, turn_value=%d",
              cmd_msg.drive_value, cmd_msg.turn_value);
 }
+
+void controlFigure8_turn()
+{
+    if(!turn_left_done)
+    {
+        if ((ros::Time::now() - turn_time).toSec() < 5.0) // 左转5s
+        {
+            controlFigure8_turnleft();
+            ROS_INFO("Turn left for %.2f seconds", (ros::Time::now() - turn_time).toSec());
+        }
+    }
+    else
+    {
+        if ((ros::Time::now() - turn_time).toSec() < 5.0) // 左转5s
+        {
+            controlFigure8_turnright();
+            ROS_INFO("Turn right for %.2f seconds", (ros::Time::now() - turn_time).toSec());
+        }
+    }
+}
+
 void parking()
 {
     cout << "~~~stop~~~ flag front " << yolofront_flag << " ,rear " << rear_flag << " ,appsignal_flag " << appsignal_flag << " ,outboundary_flag " << outboundary_flag << endl;
@@ -211,7 +255,6 @@ void parking()
     }
     else
     {
-        cout << "~~~stop~~~ flag front " << yolofront_flag << " ,rear " << rear_flag << " ,appsignal_flag " << appsignal_flag << " ,outboundary_flag " << outboundary_flag << endl;
         stop_car.data = true;
     }
     pub_stopflag.publish(stop_car);
@@ -220,7 +263,7 @@ void parking()
 // 检查所有标志位是否为true，并处理不符合的标志位
 bool checkAndResetNodes(const mower_msgs::Monitor &msgs)
 {
-    bool all_true = true;
+    //bool all_true = true;
     monitor = msgs;
     pub_monitor.publish(monitor);
 
@@ -230,14 +273,15 @@ bool checkAndResetNodes(const mower_msgs::Monitor &msgs)
     monitor.node_normal.fill(false);
 
     // 如果所有节点都为true，执行相应操作
-    if (1)
-    { //  all_true
-        return true;
-    }
-    else
-    {
-        return false;
-    }
+    return true;
+    // if (1)
+    // { //  all_true
+    //     return true;
+    // }
+    // else
+    // {
+    //     return false;
+    // }
 }
 
 void task_run()
@@ -294,196 +338,170 @@ void ManualDriveCallBack(const mower_msgs::Manual_Driving_Cmd &manual_drive_msgs
 
 void SingalCallBack(const std_msgs::String &singal_msgs)
 {
-    std::string signal = singal_msgs.data;
-
-    // 处理初始化模式信号
-    if (signal == "init_location")
+    switch (ParseSignal(singal_msgs.data))
     {
-        if (1)
+        case SignalCmd::InitLocation:
         {
             init_requested = true;
             init_confirmed = false;
-            init_mode = false; // 先不进入初始化模式，等待确认
-            ROS_INFO("Initialization requested - waiting for confirmation");
+            init_mode = false;
 
-            // 发布初始化请求
             std_msgs::Bool init_request_msg;
             init_request_msg.data = true;
             pub_init_request.publish(init_request_msg);
+
+            ROS_INFO("Initialization requested - waiting for confirmation");
+            break;
         }
-        else
+        case SignalCmd::InitConfirm:
         {
-            ROS_WARN("Position already available, ignoring location signal");
-        }
-        return;
-    }
-
-    // 处理初始化确认信号
-    if (signal == "true")
-    {
-        straight_done = false;
-        turn_left_done = false;
-        turn_right_done = false;
-        straight_active = false;
-        turn_left_active = false;
-        turn_right_active = false;
-        if (init_requested)
-        {
-            init_confirmed = true;
-            init_mode = true;
-            init_start_time = ros::Time::now();
-            init_finish = false;
-            ROS_INFO("Initialization confirmed - starting Figure8 pattern");
-        }
-        else
-        {
-            ROS_WARN("No initialization request or position already available");
-        }
-        return;
-    }
-
-    if (signal == "reset")
-    {
-        straight_done = false;
-        turn_left_done = false;
-        turn_right_done = false;
-        straight_active = false;
-        turn_left_active = false;
-        turn_right_active = false;
-        init_finish = false;
-
-        init_mode = false;
-        init_requested = false;
-        init_confirmed = false;
-
-        return;
-    }
-
-    // 处理初始化取消信号
-    if (signal == "false")
-    {
-        if (init_mode)
-        {
-            // 停止车辆
-            mower_msgs::VehicleCmd cmd_msg;
-            cmd_msg.turn_value = 0;
-            cmd_msg.drive_value = 0;
-            cmd_msg.ad_control_enable = 1;
-            cmd_msg.gear_model = 0;
-            cmd_msg.mover_bool = 0;
-            cmd_msg.mower_height = 0;
-            cmd_msg.header.stamp = ros::Time::now(); // 设置时间戳
-            pub_vehicle_cmd.publish(cmd_msg);
-
-            // 复位所有初始化状态标志，真正退出初始化
-            init_mode = false;
-            init_requested = false;
-            init_confirmed = false;
-            init_finish = false;
-
-            // 复位运动阶段标志
-            straight_done = false;
             turn_left_done = false;
-            turn_right_done = false;
-            straight_active = false;
-            turn_left_active = false;
-            turn_right_active = false;
-
-            ROS_INFO("Initialization cancelled - stopping vehicle");
-        }
-        return;
-    }
-
-    if (signal == "start_execution")
-    {
-        if (pid_controller_pid == -1)
-        {
-            pid_controller_pid = fork();
-            if (pid_controller_pid == 0)
+            turn_active = false;
+            if (init_requested)
             {
-                // 子进程：创建新会话，独立进程组，执行 roslaunch 命令
-                setsid(); // 非常关键，保证新进程组
-                execl("/bin/bash", "bash", "-c",
-                      "source /home/nvidia/crawler_control/devel/setup.bash && "
-                      "roslaunch pure_pursuit pure_pursuit.launch > /home/nvidia/crawler_control/logs/pure_pursuit.logs 2>&1 &",
-                      (char *)0);
-                // 如果 execl 失败
-                perror("execl failed");
-                exit(1);
-            }
-            else if (pid_controller_pid > 0)
-            {
-                ROS_INFO("Started pid_controller.launch with PID: %d", pid_controller_pid);
+                init_confirmed = true;
+                init_mode = true;
+                init_start_time = ros::Time::now();
+                init_finish = false;
+                ROS_INFO("Initialization confirmed - starting Figure8 pattern");
             }
             else
             {
-                ROS_ERROR("Failed to fork process for roslaunch");
+                ROS_WARN("No initialization request or position already available");
+            }
+            break;
+        }
+        case SignalCmd::InitCancel:
+        {
+            if (init_mode)
+            {
+                mower_msgs::VehicleCmd cmd_msg;
+                cmd_msg.turn_value = 0;
+                cmd_msg.drive_value = 0;
+                cmd_msg.ad_control_enable = 1;
+                cmd_msg.gear_model = 0;
+                cmd_msg.mover_bool = 0;
+                cmd_msg.mower_height = 0;
+                cmd_msg.header.stamp = ros::Time::now();
+                pub_vehicle_cmd.publish(cmd_msg);
+
+                init_mode = false;
+                init_requested = false;
+                init_confirmed = false;
+                init_finish = false;
+
+                turn_left_done = false;
+                turn_active = false;
+
+                ROS_INFO("Initialization cancelled - stopping vehicle");
+            }
+            break;
+        }
+        case SignalCmd::Reset:
+        {
+            turn_left_done = false;
+            turn_active = false;
+            init_finish = false;
+
+            init_mode = false;
+            init_requested = false;
+            init_confirmed = false;
+            break;
+        }
+        case SignalCmd::StartExecution:
+        {
+            if (pid_controller_pid == -1)
+            {
+                pid_controller_pid = fork();
+                if (pid_controller_pid == 0)
+                {
+                    setsid();
+                    execl("/bin/bash", "bash", "-c",
+                          "source /home/nvidia/crawler_control/devel/setup.bash && "
+                          "roslaunch pure_pursuit pure_pursuit.launch > /home/nvidia/crawler_control/logs/pure_pursuit.logs 2>&1 &",
+                          (char *)0);
+                    perror("execl failed");
+                    exit(1);
+                }
+                else if (pid_controller_pid > 0)
+                {
+                    ROS_INFO("Started pid_controller.launch with PID: %d", pid_controller_pid);
+                }
+                else
+                {
+                    ROS_ERROR("Failed to fork process for roslaunch");
+                    pid_controller_pid = -1;
+                }
+            }
+            else
+            {
+                ROS_WARN("pp_controller already running with PID: %d", pid_controller_pid);
+            }
+            break;
+        }
+        case SignalCmd::StopExecution:
+        {
+            if (pid_controller_pid > 0)
+            {
+                int ret = system("rosnode kill /pure_pursuit");
+                if (ret == 0)
+                {
+                    ROS_INFO("Sent rosnode kill /pure_pursuit");
+                }
+                kill(-pid_controller_pid, SIGKILL);
+
+                int status;
+                for (int i = 0; i < 50; ++i)
+                {
+                    if (waitpid(pid_controller_pid, &status, WNOHANG) == pid_controller_pid)
+                        break;
+                    ros::Duration(0.1).sleep();
+                }
                 pid_controller_pid = -1;
             }
-        }
-        else
-        {
-            ROS_WARN("pp_controller already running with PID: %d", pid_controller_pid);
-        }
-    }
-    else if (signal == "stop_execution")
-    {
-        if (pid_controller_pid > 0)
-        {
-            int ret = system("rosnode kill /pure_pursuit");
-            if (ret == 0)
+            else
             {
-                ROS_INFO("Sent rosnode kill /pure_pursuit");
+                ROS_WARN("No running pid_controller to stop");
             }
-            // 杀整个进程组
-            kill(-pid_controller_pid, SIGKILL);
-
-            // 循环等待确认退出
-            int status;
-            for (int i = 0; i < 50; ++i)
-            {
-                if (waitpid(pid_controller_pid, &status, WNOHANG) == pid_controller_pid)
-                    break;
-                ros::Duration(0.1).sleep();
-            }
-
-            pid_controller_pid = -1;
+            break;
         }
-        else
+        case SignalCmd::StartWork:
         {
-            ROS_WARN("No running pid_controller to stop");
+            taskstatus = Working;
+            manual_better = false;
+            appsignal_flag = false;
+            break;
         }
-    }
-
-    // 原有的逻辑（保留）
-    if (signal == "start_work")
-    {
-        taskstatus = Working;
-        manual_better = false;
-
-        appsignal_flag = false;
-    }
-    if (singal_msgs.data == "pause")
-    {
-        taskstatus = Pausing;
-        manual_better = true;
-        appsignal_flag = true; //@xhj：add in 250317
-    }
-    if (singal_msgs.data == "continue")
-    {
-        taskstatus = Working;
-        manual_better = false;
-        appsignal_flag = false;
-    }
-    if (singal_msgs.data == "return")
-    {
-        taskstatus = Returning;
-        manual_better = false;
-    }
-    //@xhj：add in 250317
-    if (singal_msgs.data == "stop")
-    {
-        appsignal_flag = true;
+        case SignalCmd::Pause:
+        {
+            taskstatus = Pausing;
+            manual_better = true;
+            appsignal_flag = true;
+            break;
+        }
+        case SignalCmd::Continue:
+        {
+            taskstatus = Working;
+            manual_better = false;
+            appsignal_flag = false;
+            break;
+        }
+        case SignalCmd::Return:
+        {
+            taskstatus = Returning;
+            manual_better = false;
+            break;
+        }
+        case SignalCmd::Stop:
+        {
+            appsignal_flag = true;
+            break; 
+        }    
+        case SignalCmd::Unknown:
+        {
+             ROS_WARN("Unknown signal appears");
+            break; 
+        }    
     }
 }
 
@@ -503,6 +521,7 @@ void FusionMapCallBack(const mower_msgs::Position &msgs)
         init_mode = false;
         init_requested = false;
         init_confirmed = false;
+        turn_active = false;
         ROS_INFO("Position acquired! Exiting initialization mode.");
         ROS_INFO("Stopping vehicle after acquiring position");
     }
@@ -619,7 +638,7 @@ void YoloflagfrontCallBack(const std_msgs::Bool &range_msgs)
     if (range_msgs.data && rangewarn_flag != 1)
     {
         yolofront_flag = true;
-        ROS_WARN("!!! YOLO found dynamic obstalces !!!");
+        ROS_WARN("!!! YOLO found dynamic obstalces !!!");(!imu_msgs.data)
     }
     else
     {
@@ -696,107 +715,29 @@ int main(int argc, char **argv)
         if (init_mode && !has_position)
         {
             // 先sleep 3秒
-            if (!turn_left_done && !straight_done && !turn_right_done && !turn_left_active && !straight_active && !turn_right_active)
+            if (!turn_active)
             {
                 ROS_INFO("Waiting 3 seconds before starting straight driving...");
-                ros::Duration(3.0).sleep(); // 等待RTK重启
+                ros::Duration(3.0).sleep(); // 
+                turn_active = true;
+                turn_time = ros::Time::now();
             }
 
-            // 第一阶段：左转
-            if (!turn_left_done)
+            if ((ros::Time::now() - turn_time).toSec() < 7.0 && (ros::Time::now() - turn_time).toSec() >= 5.0) // 判断是否直行
             {
-                if (!turn_left_active)
-                {
-                    turn_left_active = true;
-                    turn_left_time = ros::Time::now();
-                }
-
-                if (turn_left_active && (ros::Time::now() - turn_left_time).toSec() < 5.0) // 左转5s
-                {
-                    controlFigure8_turnleft();
-                    ROS_INFO("Turn left for %.2f seconds", (ros::Time::now() - turn_left_time).toSec());
-                }
-                else
-                {
-                    turn_left_done = true;
-                    turn_left_active = false;
-                    straight_active = false;
-                    straight_done = false;
-                }
-                loop_rate.sleep();
-                continue;
+                goStraight();
+                ROS_INFO("Go Straight for %.2f seconds", (ros::Time::now() - turn_time).toSec());
             }
-
-            // 第二阶段：直行
-            if (!straight_done)
+            else if((ros::Time::now() - turn_time).toSec() >= 7.0)// 判断是否完成直行
             {
-                if (!straight_active)
-                {
-                    straight_active = true;
-                    straight_start_time = ros::Time::now();
-                }
-                if (straight_active && (ros::Time::now() - straight_start_time).toSec() < 2.0) // 直行2s
-                {
-                    goStraight();
-                    ROS_INFO("Go Straight for %.2f seconds", (ros::Time::now() - straight_start_time).toSec());
-                }
-                else
-                {
-                    if (turn_left_done)
-                    {
-                        if (turn_right_done)
-                        {
-                            straight_active = false;
-                            straight_done = true;
-                            turn_left_active = false;
-                            turn_left_done = false;
-                            turn_right_active = false;
-                            turn_right_done = false;
-                        }
-                        else
-                        {
-                            straight_active = false;
-                            straight_done = true;
-                            turn_right_active = false;
-                            turn_right_done = false;
-                        }
-                    }
-                    else if (turn_right_done)
-                    {
-                        straight_active = false;
-                        straight_done = true;
-                        turn_left_active = false;
-                        turn_left_done = false;
-                    }
-                }
-                loop_rate.sleep();
-                continue;
-            }
-
-            // 第三阶段：右转
-            if (!turn_right_done)
+                turn_time = ros::Time::now();//重新计时
+                turn_left_done = !turn_left_done;//交换转弯方向
+                controlFigure8_turn()
+            } 
+            else 
             {
-                if (!turn_right_active)
-                {
-                    turn_right_time = ros::Time::now();
-                    turn_right_active = true;
-                }
-                if (turn_right_active && (ros::Time::now() - turn_right_time).toSec() < 5.0) // 右转5秒
-                {
-                    controlFigure8_turnright();
-                    ROS_INFO("Turn right for %.2f seconds", (ros::Time::now() - turn_right_time).toSec());
-                }
-                else
-                {
-                    turn_right_active = false;
-                    turn_right_done = true;
-                    straight_active = false;
-                    straight_done = false;
-                }
-                loop_rate.sleep();
-                continue;
+                controlFigure8_turn();
             }
-            // 现优化思路：将该部分设计成状态机，或者参考思路，并且根据flag确认直行后是左转还是右转
         }
 
         mower_msgs::CheckResult result;
