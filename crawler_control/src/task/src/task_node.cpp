@@ -76,7 +76,7 @@ ros::Subscriber sub_warn;
 ros::Publisher pub_stopflag;
 
 bool check_flag = false; // 自检标志
-bool manual_better = false;
+// bool manual_better = false;
 std_msgs::Bool stop_car;
 
 // 初始化程序相关变量
@@ -468,28 +468,28 @@ void SingalCallBack(const std_msgs::String &singal_msgs)
         case SignalCmd::StartWork:
         {
             taskstatus = Working;
-            manual_better = false;
+            //manual_better = false;
             appsignal_flag = false;
             break;
         }
         case SignalCmd::Pause:
         {
             taskstatus = Pausing;
-            manual_better = true;
+            //manual_better = true;
             appsignal_flag = true;
             break;
         }
         case SignalCmd::Continue:
         {
             taskstatus = Working;
-            manual_better = false;
+            //manual_better = false;
             appsignal_flag = false;
             break;
         }
         case SignalCmd::Return:
         {
             taskstatus = Returning;
-            manual_better = false;
+            //manual_better = false;
             break;
         }
         case SignalCmd::Stop:
