@@ -254,8 +254,8 @@ void PurePursuit::publishCommand(const Twist &cmd)
 	mower_msgs::VehicleCmd cmd_msg;
 	cmd_msg.header.stamp = ros::Time::now();
 	cmd_msg.drive_value = static_cast<int>(cmd.linear * 100.0f); // 转化成cm/s
-	// 单片机端角速度方向是左手坐标系，对转速乘以 π 并缩小 100 倍，因此这里需乘 100/π
-	cmd_msg.turn_value = static_cast<int>(cmd.angular * 100.0f / M_PI);
+	// 单片机端角速度方向是左手坐标系，并且需要取整[由于100会导致精度损失，改为乘以1000]
+	cmd_msg.turn_value = static_cast<int>(cmd.angular * 2000.0f);//2000是为了可以在取整时对小数点后面四舍五入
 	cmd_msg.turn_value = -cmd_msg.turn_value;
 	cmd_msg.ad_control_enable = 1;
 	if (fabs(cmd.linear) < 1e-4f && fabs(cmd.angular) < 1e-4f)
@@ -277,7 +277,7 @@ void PurePursuit::publishCommand(const Twist &cmd)
 	pub_command_.publish(cmd_msg);
 	ROS_INFO("当前线速度: %.3f m/s, 当前角速度: %.3f rad/s",
 		static_cast<double>(cmd_msg.drive_value) / 100.0,
-		static_cast<double>(cmd_msg.turn_value) * M_PI / 100.0);
+		static_cast<double>(cmd_msg.turn_value) / 2000.0);
 }
 
 // 计算原地旋转的速度
